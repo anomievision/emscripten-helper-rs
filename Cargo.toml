@@ -1,0 +1,14 @@
+[package]
+name = "emscripten-helper-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.63"
+authors = ["AnomieVision <anomievision@gmail.com.com>", "Original Dev: Wim Vander Schelden <lists@fixnum.org>"]
+description = "Provides an easy to use interface between emscripten javascript and rust"
+license = "Apache-2.0"
+repository = "https://github.com/anomievision/emscripten-helper-rs"
+keywords = []
+categories = []
+readme = "README.md"
+
+[dependencies]
