@@ -371,10 +371,12 @@ impl<'a> std::convert::From<&'a JSObject> for JSObject {
 impl Drop for JSObject {
     fn drop(&mut self) {
         if self.jshandle && Rc::strong_count(&self.refcount) == 1 {
-            let code : &'static [u8] = b"HELPERJS.releaseObject($0);\0";
-            unsafe {
-                emscripten::emscripten_asm_const_int(code as *const _ as *const std::os::raw::c_char, arg_sigs as *const _ as *const std::os::raw::c_char, self.value);
-            }
+            js!("HELPERJS.releaseObject($0);", self.value);
+            
+            // let code : &'static [u8] = b"HELPERJS.releaseObject($0);\0";
+            // unsafe {
+            //     emscripten::emscripten_asm_const_int(code as *const _ as *const std::os::raw::c_char, arg_sigs as *const _ as *const std::os::raw::c_char, self.value);
+            // }
         }
     }
 }
@@ -385,15 +387,18 @@ impl<T> std::convert::From<Vec<T>> for JSObject
         let arr = js_obj!("return HELPERJS.storeObject([]);");
         for elem in v {
             let elem_js = JSObject::from(elem);
-            let code : &'static [u8] = if elem_js.jshandle {
-                b"HELPERJS.loadObject($0).push(HELPERJS.loadObject($1))\0"
+            let code = if elem_js.jshandle {
+                "HELPERJS.loadObject($0).push(HELPERJS.loadObject($1))"
             } else {
-                b"HELPERJS.loadObject($0).push($1)\0"
+                "HELPERJS.loadObject($0).push($1)"
             };
-            unsafe {
-                emscripten::emscripten_asm_const_int(code as *const _ as *const std::os::raw::c_char,
-                                                     arr.value, elem_js.value);
-            }
+
+            js!(code, arr.value, elem_js.value);
+
+            // unsafe {
+            //     emscripten::emscripten_asm_const_int(code as *const _ as *const std::os::raw::c_char,
+            //                                          arr.value, elem_js.value);
+            // }
         }
         arr
     }
@@ -430,13 +435,13 @@ __js_from_numeric!(isize, usize, i32, u32, i16, u16, i8, u8, f32, f64);
 
 impl<'a> std::convert::From<&'a str> for JSObject {
     fn from(s: &'a str) -> Self { // TODO: This won't work when the pointer can't fit in 31bit int.
-        let code : &'static [u8] = b"return HELPERJS.storeObject(HELPERJS.copyStringFromHeap($0, $1));\0";
+        // let code : &'static [u8] = b"return HELPERJS.storeObject(HELPERJS.copyStringFromHeap($0, $1));\0";
         let data : Vec<u16> = s.encode_utf16().collect();
-        let data_ptr_as_isize = data.as_ptr();
+        let data_ptr_as_isize = data.as_ptr() as isize;
+        let value = js_int!("return HELPERJS.storeObject(HELPERJS.copyStringFromHeap($0, $1));", data_ptr_as_isize, data.len() as f64) as f64;
         unsafe {
             JSObject {
-                value: emscripten::emscripten_asm_const_int(code as *const _ as *const std::os::raw::c_char,
-                                                            data_ptr_as_isize, data.len()) as f64,
+                value: value,//emscripten::emscripten_asm_const_int(code as *const _ as *const std::os::raw::c_char, data_ptr_as_isize, data.len()) as f64,
                 jshandle: true,
                 refcount: Rc::new(()),
             }
