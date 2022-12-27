@@ -62,6 +62,8 @@ string. The memory is freed after conversion, so the pointer should be considere
 use std::ptr;
 use std::rc::Rc;
 
+type em_callback_func = unsafe extern "C" fn(context: *mut std::os::raw::c_void);
+
 /// This module declares C functions provided by either emscripten or the C standard library.
 /// These are all unsafe, and most are described in [the emscripten documentation](http://kripken.github.io/emscripten-site/docs/api_reference/emscripten.h.html).
 /// You should probably avoid using these directly.
@@ -74,17 +76,17 @@ pub mod emscripten {
         ///
         /// See [emscripten_run_script (emscripten documentation)](http://kripken.github.io/emscripten-site/docs/api_reference/emscripten.h.html#c.emscripten_run_script) for details.
         #[allow(dead_code)]
-        pub fn emscripten_run_script(s: *const std::os::raw::c_char);
+        pub fn emscripten_run_script(script: *const std::os::raw::c_char);
         /// Run a snippet of JavaScript with no arguments and an integer return value.
         ///
         /// See [emscripten_run_script (emscripten documentation)](http://kripken.github.io/emscripten-site/docs/api_reference/emscripten.h.html#c.emscripten_run_script_int) for details.
         #[allow(dead_code)]
-        pub fn emscripten_run_script_int(s: *const std::os::raw::c_char) -> std::os::raw::c_int;
+        pub fn emscripten_run_script_int(script: *const std::os::raw::c_char) -> std::os::raw::c_int;
         /// Run a snippet of JavaScript with no arguments that returns a C string.
         ///
         /// See [emscripten_run_script (emscripten documentation)](http://kripken.github.io/emscripten-site/docs/api_reference/emscripten.h.html#c.emscripten_run_script_string) for details.
         #[allow(dead_code)]
-        pub fn emscripten_run_script_string(s: *const std::os::raw::c_char) -> *const std::os::raw::c_char;
+        pub fn emscripten_run_script_string(script: *const std::os::raw::c_char) -> *const std::os::raw::c_char;
         
         /// Run a snippet of JavaScript with no arguments.
         ///
@@ -93,7 +95,7 @@ pub mod emscripten {
         /// to inline the code directly into the generated asm.js (or webassembly scaffolding code)
         /// and this avoids using `eval()`.
         #[allow(dead_code)]
-        pub fn emscripten_asm_const(s: *const std::os::raw::c_char);
+        pub fn emscripten_asm_const(code: *const std::os::raw::c_char, arg_sigs: *const std::os::raw::c_char);
         /// Run a snippet of JavaScript with any arguments that can be doubles or ints, and returns an int.
         ///
         /// This function is slightly faster than `emscripten_run_script_int` but requires that
@@ -103,17 +105,24 @@ pub mod emscripten {
         /// Unlike `emscripten_run_script_int`, this function also allows passing arguments to the JavaScript
         /// side.
         #[allow(dead_code)]
-        pub fn emscripten_asm_const_int(s: *const std::os::raw::c_char, ...) -> std::os::raw::c_int;
+        pub fn emscripten_asm_const_int(code: *const std::os::raw::c_char, arg_sigs: *const std::os::raw::c_char, ...) -> std::os::raw::c_int;
         /// Run a snippet of JavaScript with any arguments that can be doubles or ints, and returns a double.
         ///
         /// This is a version of `emscripten_asm_const_int` which doesn't convert the JavaScript result to an
         /// int, but instead preserves it as a double-precision floating point.
         #[allow(dead_code)]
-        pub fn emscripten_asm_const_double(s: *const std::os::raw::c_char, ...) -> std::os::raw::c_double;
+        pub fn emscripten_asm_const_double(code: *const std::os::raw::c_char, arg_sigs: *const std::os::raw::c_char, ...) -> std::os::raw::c_double;
         #[allow(dead_code)]
         pub fn emscripten_pause_main_loop();
         #[allow(dead_code)]
-        pub fn emscripten_set_main_loop(m: extern fn(), fps: std::os::raw::c_int, infinite: std::os::raw::c_int);
+        pub fn emscripten_set_main_loop(func: extern fn(), fps: std::os::raw::c_int, infinite: std::os::raw::c_int);
+        #[allow(dead_code)]
+        pub fn emscripten_set_main_loop_arg(
+            func: crate::em_callback_func,
+            arg: *mut std::os::raw::c_void,
+            fps: std::os::raw::c_int,
+            simulate_infinite_loop: std::os::raw::c_int,
+        );
 
         /// See [free(3)](https://linux.die.net/man/3/free)
         pub fn free(p: *mut u8);
@@ -132,8 +141,10 @@ fn string_from_js(ptr: *mut u16) -> String {
 
 /// Run a snippet of JavaScript code.
 pub fn js_eval(code: &'static [u8]) {
+    let arg_sigs = [0].as_ptr();
+
     unsafe {
-        emscripten::emscripten_asm_const(code as *const _ as *const std::os::raw::c_char);
+        emscripten::emscripten_asm_const(code as *const _ as *const std::os::raw::c_char, arg_sigs as *const _ as *const std::os::raw::c_char);
     }
 }
 
@@ -150,10 +161,10 @@ pub fn js_eval(code: &'static [u8]) {
 macro_rules! __js_macro {
     ( $emscr_func:ident, $jscode:expr, $($args:expr),* ) => {
         {
-            let jscode : &'static [u8] = concat!($jscode, "\0").as_bytes();
+            let jscode : &'static [u8] = format!("{:?}\0", $jscode).as_bytes();
+            let arg_sigs: &[u8] = &[$((format!("{:?}", $args), b'd').1 ),*];
             unsafe {
-                $crate::emscripten::$emscr_func(jscode as *const _ as *const std::os::raw::c_char,
-                                                $( $crate::JSObject::from($args).value ),* )
+                $crate::emscripten::$emscr_func(jscode as *const _ as *const std::os::raw::c_char, arg_sigs as *const _ as *const std::os::raw::c_char, $( $crate::JSObject::from($args).value ),* )
             }
         }
     };
@@ -344,7 +355,7 @@ macro_rules! js_double {
 ///
 /// [`HELPERJS`]: index.html#emscripten-helper-global
 /// [`js!`]:  macro.js.html
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct JSObject {
     pub value: f64,
     jshandle: bool,
@@ -362,7 +373,7 @@ impl Drop for JSObject {
         if self.jshandle && Rc::strong_count(&self.refcount) == 1 {
             let code : &'static [u8] = b"HELPERJS.releaseObject($0);\0";
             unsafe {
-                emscripten::emscripten_asm_const_int(code as *const _ as *const std::os::raw::c_char, self.value);
+                emscripten::emscripten_asm_const_int(code as *const _ as *const std::os::raw::c_char, arg_sigs as *const _ as *const std::os::raw::c_char, self.value);
             }
         }
     }
@@ -479,4 +490,25 @@ impl std::convert::From<JSObject> for bool {
 pub fn init() {
     js_eval(concat!(include_str!(concat!(env!("OUT_DIR"), "/helper.js")),
                     "\0").as_bytes())
+}
+
+// Rust safe-wrapper using emscripten_set_main_loop_arg
+pub fn set_main_loop<F: FnMut() + 'static>(
+    fps: std::os::raw::c_int,
+    simulate_infinite_loop: std::os::raw::c_int,
+    callback: F,
+) {
+    let on_the_heap = Box::new(callback);
+    let leaked_pointer = Box::into_raw(on_the_heap);
+    let untyped_pointer = leaked_pointer as *mut std::os::raw::c_void;
+
+    unsafe {
+        emscripten::emscripten_set_main_loop_arg(wrapper::<F>, untyped_pointer, fps, simulate_infinite_loop)
+    }
+
+    extern "C" fn wrapper<F: FnMut() + 'static>(untyped_pointer: *mut std::os::raw::c_void) {
+        let leaked_pointer = untyped_pointer as *mut F;
+        let callback_ref = unsafe { &mut *leaked_pointer };
+        callback_ref()
+    }
 }
